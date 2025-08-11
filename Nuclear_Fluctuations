@@ -1,0 +1,121 @@
+#This script takes image stacks of single nuclei over time with labelled nuclear periphery markers as inputs
+#Authors Adib Keikhosravi and Kate Miroshnikova
+import numpy as np
+import time, os, sys
+from skimage import io
+import pandas as pd
+import glob
+import tifffile
+from skimage.transform import rotate, warp_polar, rescale
+import matplotlib.pyplot as plt
+from scipy.stats import entropy
+from skimage.util import view_as_windows
+
+input_dir = r"ENTER DIRECTORY TO IMAGE FILES"
+output_dir = r"ENTER DIRECTORY WHERE TO OUTPUT FILES"
+if os.path.isdir(output_dir) == False:
+    os.mkdir(output_dir) 
+
+lamina_movement_plots = os.path.join(output_dir, 'lamina_movement_plots')
+if os.path.isdir(lamina_movement_plots) == False:
+    os.mkdir(lamina_movement_plots) 
+
+lamina_movement_tables = os.path.join(output_dir, 'lamina_movement_tables')
+if os.path.isdir(lamina_movement_tables) == False:
+    os.mkdir(lamina_movement_tables) 
+    
+polar_stacks = os.path.join(output_dir, 'polar_stacks')
+if os.path.isdir(polar_stacks) == False:
+    os.mkdir(polar_stacks) 
+    
+    
+    
+lamina_movement_plots = os.path.join(output_dir, 'lamina_movement_plots')
+if os.path.isdir(lamina_movement_plots) == False:
+    os.mkdir(lamina_movement_plots)     
+    
+def windowed_entropy_image(image, window_size):
+    """
+    Create an image representing the windowed entropy of the original image.
+
+    :param image: A grayscale image as a 2D numpy array.
+    :param window_size: The size of the window to compute entropy over.
+    :return: An image where each pixel's intensity represents the entropy of the corresponding window.
+    """
+    if image.dtype != np.uint8:
+        image = (255 * image).astype(np.uint8)
+
+    # Create windows
+    pad_width = window_size // 2
+    padded_image = np.pad(image, pad_width, mode='reflect')
+    windows = view_as_windows(padded_image, (window_size, window_size))
+
+    def entropy_of_window(window):
+        hist, _ = np.histogram(window, bins=256, range=(0, 255))
+        return entropy(hist, base=2)
+
+    entropy_image = np.zeros_like(image, dtype=float)
+    for i in range(entropy_image.shape[0]):
+        for j in range(entropy_image.shape[1]):
+            entropy_image[i, j] = entropy_of_window(windows[i, j])
+
+    entropy_image -= entropy_image.min()
+    entropy_image /= entropy_image.max()
+    entropy_image *= 255
+    return entropy_image.astype(np.uint8)
+
+
+
+
+
+stack_list = os.listdir(input_dir)
+radius = 64
+
+for stack_name in stack_list:
+    if stack_name.endswith('.tif'):
+        
+        nuc_track = tifffile.imread(os.path.join(input_dir, stack_name))
+        
+        t, h, w = nuc_track.shape
+        polar_stack = np.zeros((t, 360, radius))
+        argmax_polar = np.zeros((t, 360))
+        max_polar = np.zeros((t, 360))
+        mean_polar = np.zeros((t, 360))
+        for i in range(t):
+
+            polar_stack[i, :, :] = warp_polar(nuc_track[i,:,:], radius=radius)
+            argmax_polar[i, :] = np.argmax(polar_stack[i, :, :], axis=1)
+            max_polar[i, :] = np.max(polar_stack[i, :, :], axis=1)
+            mean_polar[i, :] = np.mean(polar_stack[i, :, :], axis=1)
+            
+        tifffile.imwrite(os.path.join(polar_stacks, 'polar' + stack_name), polar_stack)
+       # Create the figure and plot
+        lamina_std_values = np.std(argmax_polar, axis=0)
+        plt.figure(figsize=(10, 10))
+        plt.plot(lamina_std_values)
+
+        # Adding title, x and y labels
+        plt.title("Standary Deviation Of The Locatoin Of Lamina On Along Time Axis")
+        plt.xlabel("Angle (Degrees)")
+        plt.ylabel("Lamina Location Standard Deviation (Pixels)")
+
+        # Saving the figure
+        plt.savefig(os.path.join(lamina_movement_plots, 'std_plot_' + stack_name.replace('.tif','.png')))
+
+        # Clearing the figure to free memory
+        plt.clf()
+        
+        angles = np.arange(1, len(lamina_std_values) + 1)
+
+        # Create the DataFrame
+        std_values_df = pd.DataFrame({
+            'angle': angles,
+            'lamina_std': lamina_std_values
+        })
+        
+        std_values_df.to_csv(os.path.join(lamina_movement_tables, 'std_values_' + stack_name.replace('.tif','.csv')), sep='\t', index=False)
+        
+        print('Saved results for: ', stack_name)
+
+print('Done...')
+        
